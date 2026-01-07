@@ -3,7 +3,7 @@ import { SubscribeMessage, WebSocketGateway } from '@nestjs/websockets';
 @WebSocketGateway()
 export class TablesGateway {
   @SubscribeMessage('message')
-  handleMessage(client: any, payload: any): string {
+  handleMessage(): string {
     return 'Hello world!';
   }
 }
