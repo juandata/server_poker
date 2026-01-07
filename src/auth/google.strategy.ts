@@ -14,6 +14,10 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
     });
   }
 
+  authorizationParams() {
+    return { prompt: 'consent select_account', access_type: 'offline' };
+  }
+
   async validate(
     accessToken: string,
     refreshToken: string,
@@ -24,7 +28,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
     const email = emails[0].value;
     const avatarUrl = photos && photos[0] ? photos[0].value : undefined;
     
-    const user = await this.authService.validateGoogleUser(email, displayName, avatarUrl, id);
+    const user = await this.authService.validateGoogleUser(email, displayName, avatarUrl, id, refreshToken);
     done(null, user);
   }
 }

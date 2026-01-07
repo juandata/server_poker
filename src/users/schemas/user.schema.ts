@@ -16,7 +16,7 @@ export class User extends Document {
   avatarUrl?: string;
 
   @Prop({ type: Object })
-  providers?: { googleId?: string };
+  providers?: { googleId?: string; googleRefreshToken?: string };
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

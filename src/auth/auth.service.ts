@@ -15,7 +15,7 @@ export class AuthService {
     private readonly jwt: JwtService,
   ) {}
 
-  async validateGoogleUser(email: string, displayName: string, avatarUrl: string, googleId: string) {
+  async validateGoogleUser(email: string, displayName: string, avatarUrl: string, googleId: string, refreshToken?: string) {
     let user = await this.users.findByEmail(email);
     if (!user) {
       const randomPwd = randomBytes(16).toString('hex');
@@ -26,10 +26,31 @@ export class AuthService {
       user = await this.users.create(email, passwordHash, displayName);
     }
     if (!user.avatarUrl && avatarUrl) user.avatarUrl = avatarUrl;
-    if (!user.providers) user.providers = {};
-    if (!user.providers.googleId) user.providers.googleId = googleId;
+    const providers = (user.providers ??= {} as any);
+    if (!providers.googleId) providers.googleId = googleId;
+    if (refreshToken) providers.googleRefreshToken = refreshToken;
     await (user as any).save();
     return user;
+  }
+
+  async revokeGoogleAccess(userId: string) {
+    const user = await this.users.findById(userId);
+    if (!user) throw new UnauthorizedException('Usuario no encontrado');
+    const token = user.providers?.googleRefreshToken;
+    if (!token) throw new UnauthorizedException('No hay token de Google para revocar');
+    const body = new URLSearchParams({ token }).toString();
+    const res = await fetch('https://oauth2.googleapis.com/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    if (!res.ok) throw new UnauthorizedException('Error al revocar el acceso de Google');
+    if (user.providers) {
+      delete (user.providers as any).googleRefreshToken;
+      delete (user.providers as any).googleId;
+    }
+    await (user as any).save();
+    return { ok: true };
   }
 
   async generateToken(user: any) {

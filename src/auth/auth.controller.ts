@@ -6,7 +6,7 @@ type CookieRequest = Request & { cookies?: Record<string, string | undefined> };
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(private readonly auth: AuthService) { }
 
   @Post('register')
   async register(
@@ -51,7 +51,7 @@ export class AuthController {
 
   @Get('google')
   @UseGuards(AuthGuard('google'))
-  async googleAuth(@Req() req) {}
+  async googleAuth(@Req() req) { }
 
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
@@ -60,5 +60,18 @@ export class AuthController {
     const token = await this.auth.generateToken(user);
     res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax' });
     res.redirect('http://localhost:5173/');
+  }
+  @Post('google/revoke')
+  async googleRevoke(@Req() req: CookieRequest, @Res({ passthrough: true }) res: Response) {
+    const cookieHeader = req.headers['cookie'];
+    const token = cookieHeader
+      ?.split(';')
+      .map((s) => s.trim())
+      .find((s) => s.startsWith('access_token='))
+      ?.split('=')[1];
+    const me = await this.auth.meFromToken(token);
+    await this.auth.revokeGoogleAccess(me.id);
+    res.clearCookie('access_token');
+    return { ok: true };
   }
 }
