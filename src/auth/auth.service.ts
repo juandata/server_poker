@@ -15,6 +15,27 @@ export class AuthService {
     private readonly jwt: JwtService,
   ) {}
 
+  async validateGoogleUser(email: string, displayName: string, avatarUrl: string, googleId: string) {
+    let user = await this.users.findByEmail(email);
+    if (!user) {
+      const randomPwd = randomBytes(16).toString('hex');
+      const salt = randomBytes(16).toString('hex');
+      const iterations = 310000;
+      const derived = pbkdf2Sync(randomPwd, salt, iterations, 32, 'sha256').toString('hex');
+      const passwordHash = `${salt}:${iterations}:${derived}`;
+      user = await this.users.create(email, passwordHash, displayName);
+    }
+    if (!user.avatarUrl && avatarUrl) user.avatarUrl = avatarUrl;
+    if (!user.providers) user.providers = {};
+    if (!user.providers.googleId) user.providers.googleId = googleId;
+    await (user as any).save();
+    return user;
+  }
+
+  async generateToken(user: any) {
+    return this.jwt.signAsync({ sub: String(user._id) });
+  }
+
   async register(email: string, password: string, displayName?: string) {
     const existing = await this.users.findByEmail(email);
     if (existing) throw new ConflictException('Email ya registrado');

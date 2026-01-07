@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { AuthGuard } from '@nestjs/passport';
 import type { Request, Response } from 'express';
 type CookieRequest = Request & { cookies?: Record<string, string | undefined> };
 
@@ -46,5 +47,18 @@ export class AuthController {
   logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie('access_token');
     return { ok: true };
+  }
+
+  @Get('google')
+  @UseGuards(AuthGuard('google'))
+  async googleAuth(@Req() req) {}
+
+  @Get('google/callback')
+  @UseGuards(AuthGuard('google'))
+  async googleAuthRedirect(@Req() req, @Res({ passthrough: true }) res: Response) {
+    const { user } = req;
+    const token = await this.auth.generateToken(user);
+    res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax' });
+    res.redirect('http://localhost:5173/');
   }
 }
