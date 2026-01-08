@@ -61,6 +61,19 @@ export class AuthController {
     res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax' });
     res.redirect('http://localhost:5173/');
   }
+
+  @Get('google/silent')
+  @UseGuards(AuthGuard('google-silent'))
+  async googleAuthSilent(@Req() req) {}
+
+  @Get('google/silent/callback')
+  @UseGuards(AuthGuard('google-silent'))
+  async googleAuthSilentRedirect(@Req() req, @Res({ passthrough: true }) res: Response) {
+    const { user } = req;
+    const token = await this.auth.generateToken(user);
+    res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax' });
+    res.redirect('http://localhost:5173/');
+  }
   @Post('google/revoke')
   async googleRevoke(@Req() req: CookieRequest, @Res({ passthrough: true }) res: Response) {
     const cookieHeader = req.headers['cookie'];
