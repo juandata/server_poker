@@ -7,6 +7,7 @@ import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { TablesGateway } from './tables/tables.gateway';
 import { TablesModule } from './tables/tables.module';
+import { RakebackModule } from './rakeback/rakeback.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { TablesModule } from './tables/tables.module';
     UsersModule,
     AuthModule,
     TablesModule,
+    RakebackModule,
   ],
   controllers: [AppController],
   providers: [AppService, TablesGateway],
