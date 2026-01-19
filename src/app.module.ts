@@ -8,6 +8,8 @@ import { AuthModule } from './auth/auth.module';
 import { TablesGateway } from './tables/tables.gateway';
 import { TablesModule } from './tables/tables.module';
 import { RakebackModule } from './rakeback/rakeback.module';
+import { AdminModule } from './admin/admin.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -21,6 +23,8 @@ import { RakebackModule } from './rakeback/rakeback.module';
     AuthModule,
     TablesModule,
     RakebackModule,
+    AdminModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [AppService, TablesGateway],
