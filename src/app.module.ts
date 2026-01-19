@@ -5,11 +5,11 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
-import { TablesGateway } from './tables/tables.gateway';
 import { TablesModule } from './tables/tables.module';
 import { RakebackModule } from './rakeback/rakeback.module';
 import { AdminModule } from './admin/admin.module';
 import { PaymentsModule } from './payments/payments.module';
+import { GameModule } from './game/game.module';
 
 @Module({
   imports: [
@@ -25,8 +25,9 @@ import { PaymentsModule } from './payments/payments.module';
     RakebackModule,
     AdminModule,
     PaymentsModule,
+    GameModule,
   ],
   controllers: [AppController],
-  providers: [AppService, TablesGateway],
+  providers: [AppService],
 })
 export class AppModule {}
