@@ -5,7 +5,7 @@ import {
   Body,
   Param,
   Headers,
-  RawBodyRequest,
+  type RawBodyRequest,
   Req,
 } from '@nestjs/common';
 import { PaymentsService } from './payments.service';

@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { User, PaymentMethod, VerificationDocType } from './schemas/user.schema';
 import { Transaction } from './schemas/transaction.schema';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class UsersService implements OnModuleInit {
@@ -139,7 +139,7 @@ export class UsersService implements OnModuleInit {
     }
 
     const newMethod: PaymentMethod = {
-      id: uuidv4(),
+      id: randomUUID(),
       type: data.type as any,
       name: data.name,
       details: data.details,
