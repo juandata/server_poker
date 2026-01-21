@@ -63,13 +63,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: CreateTablePayload,
   ) {
-    const state = this.gameEngine.createGame(
+    this.gameEngine.createGame(
       payload.tableId,
       payload.gameType,
       payload.bettingType,
       payload.blinds,
     );
     client.join(payload.tableId);
+    this.broadcastTableList();
     return { success: true, tableId: payload.tableId };
   }
 
@@ -78,6 +79,19 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: JoinTablePayload,
   ) {
+    console.log(`[GameGateway] joinTable request from socket ${client.id}:`, payload);
+
+    // Auto-create table if it doesn't exist
+    if (!this.gameEngine.getGame(payload.tableId)) {
+      console.log(`[GameGateway] Table ${payload.tableId} doesn't exist, creating it`);
+      this.gameEngine.createGame(
+        payload.tableId,
+        'texas', // default game type
+        'NL',    // default betting type
+        { small: 1, big: 2 }, // default blinds
+      );
+    }
+
     const success = this.gameEngine.addPlayer(
       payload.tableId,
       payload.odId,
@@ -89,10 +103,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (success) {
       client.join(payload.tableId);
       this.playerSockets.set(client.id, { odId: payload.odId, tableId: payload.tableId });
+      console.log(`[GameGateway] Player joined successfully, socket ${client.id} mapped to odId ${payload.odId}`);
       this.broadcastGameState(payload.tableId);
+      this.broadcastTableList();
       return { success: true };
     }
 
+    console.log(`[GameGateway] Player failed to join table`);
     return { success: false, error: 'Could not join table' };
   }
 
@@ -106,6 +123,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.leave(payload.tableId);
       this.playerSockets.delete(client.id);
       this.broadcastGameState(payload.tableId);
+      this.broadcastTableList();
     }
     return { success };
   }
@@ -150,6 +168,99 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     const state = this.gameEngine.getClientState(payload.tableId, payload.odId);
     return { success: !!state, state };
+  }
+
+  @SubscribeMessage('changeSeat')
+  handleChangeSeat(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { tableId: string; odId: string; newSeatIndex: number },
+  ) {
+    console.log(`[GameGateway] changeSeat request from socket ${client.id}:`, payload);
+    console.log(`[GameGateway] playerSockets entries:`, Array.from(this.playerSockets.entries()));
+
+    // Validate that this socket owns this player
+    const playerInfo = this.playerSockets.get(client.id);
+    console.log(`[GameGateway] Found playerInfo for socket:`, playerInfo);
+
+    if (!playerInfo || playerInfo.odId !== payload.odId) {
+      console.log(`[GameGateway] Unauthorized: playerInfo=${JSON.stringify(playerInfo)}, payload.odId=${payload.odId}`);
+      return { success: false, error: 'Unauthorized' };
+    }
+
+    const success = this.gameEngine.changeSeat(
+      payload.tableId,
+      payload.odId,
+      payload.newSeatIndex,
+    );
+
+    if (success) {
+      this.broadcastGameState(payload.tableId);
+      this.broadcastTableList();
+      return { success: true };
+    }
+
+    return { success: false, error: 'Could not change seat' };
+  }
+
+  @SubscribeMessage('watchTable')
+  handleWatchTable(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { tableId: string; odId: string },
+  ) {
+    console.log(`[GameGateway] watchTable request from socket ${client.id}:`, payload);
+
+    // Auto-create table if it doesn't exist
+    if (!this.gameEngine.getGame(payload.tableId)) {
+      console.log(`[GameGateway] Table ${payload.tableId} doesn't exist, creating it for spectator`);
+      this.gameEngine.createGame(
+        payload.tableId,
+        'texas', // default game type
+        'NL',    // default betting type
+        { small: 1, big: 2 }, // default blinds
+      );
+    }
+
+    // Join the table room to receive spectator updates
+    client.join(payload.tableId);
+    console.log(`[GameGateway] Client ${client.id} now watching table ${payload.tableId}`);
+
+    // Return spectator state
+    const state = this.gameEngine.getClientState(payload.tableId, '__spectator__');
+    return { success: true, state };
+  }
+
+  @SubscribeMessage('unwatchTable')
+  handleUnwatchTable(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { tableId: string },
+  ) {
+    client.leave(payload.tableId);
+    console.log(`[GameGateway] Client ${client.id} stopped watching table ${payload.tableId}`);
+    return { success: true };
+  }
+
+  @SubscribeMessage('getTables')
+  handleGetTables(@ConnectedSocket() client: Socket) {
+    const tables = this.gameEngine.getAllTables();
+    return { success: true, tables };
+  }
+
+  @SubscribeMessage('subscribeTables')
+  handleSubscribeTables(@ConnectedSocket() client: Socket) {
+    client.join('lobby');
+    const tables = this.gameEngine.getAllTables();
+    return { success: true, tables };
+  }
+
+  @SubscribeMessage('unsubscribeTables')
+  handleUnsubscribeTables(@ConnectedSocket() client: Socket) {
+    client.leave('lobby');
+    return { success: true };
+  }
+
+  private broadcastTableList() {
+    const tables = this.gameEngine.getAllTables();
+    this.server.to('lobby').emit('tableList', tables);
   }
 
   private broadcastGameState(tableId: string) {

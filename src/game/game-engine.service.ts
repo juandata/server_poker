@@ -62,8 +62,20 @@ export class GameEngineService {
     const existingPlayer = game.state.players.find(p => p.odId === odId);
     if (existingPlayer) return false;
 
-    const seatTaken = game.state.players.find(p => p.seatIndex === seatIndex);
-    if (seatTaken) return false;
+    let targetSeatIndex = seatIndex;
+    const isSeatTaken = game.state.players.some(p => p.seatIndex === targetSeatIndex);
+    if (isSeatTaken) {
+      let foundFree = false;
+      for (let i = 0; i < 9; i++) {
+        const taken = game.state.players.some(p => p.seatIndex === i);
+        if (!taken) {
+          targetSeatIndex = i;
+          foundFree = true;
+          break;
+        }
+      }
+      if (!foundFree) return false;
+    }
 
     const player: ServerPlayer = {
       odId,
@@ -74,7 +86,7 @@ export class GameEngineService {
       hasActed: false,
       currentRoundBet: 0,
       totalBetThisHand: 0,
-      seatIndex,
+      seatIndex: targetSeatIndex,
       isAllIn: false,
       isConnected: true,
       lastActionTime: Date.now(),
@@ -510,5 +522,65 @@ export class GameEngineService {
 
   deleteGame(tableId: string): boolean {
     return this.games.delete(tableId);
+  }
+
+  changeSeat(tableId: string, odId: string, newSeatIndex: number): boolean {
+    const game = this.games.get(tableId);
+    if (!game) return false;
+
+    // Cannot change seats during an active hand
+    if (game.state.stage !== 'waiting' && game.state.stage !== 'showdown') {
+      return false;
+    }
+
+    // Verify the new seat is free
+    const seatTaken = game.state.players.find(p => p.seatIndex === newSeatIndex);
+    if (seatTaken) return false;
+
+    // Find the player and change their seat
+    const player = game.state.players.find(p => p.odId === odId);
+    if (!player) return false;
+
+    player.seatIndex = newSeatIndex;
+    game.state.players.sort((a, b) => a.seatIndex - b.seatIndex);
+    return true;
+  }
+
+  getAllTables(): Array<{
+    tableId: string;
+    gameType: GameType;
+    bettingType: BettingType;
+    blinds: { small: number; big: number };
+    playerCount: number;
+    maxPlayers: number;
+    players: Array<{ odId: string; odName: string; seatIndex: number }>;
+  }> {
+    const tables: Array<{
+      tableId: string;
+      gameType: GameType;
+      bettingType: BettingType;
+      blinds: { small: number; big: number };
+      playerCount: number;
+      maxPlayers: number;
+      players: Array<{ odId: string; odName: string; seatIndex: number }>;
+    }> = [];
+
+    for (const [tableId, game] of this.games.entries()) {
+      tables.push({
+        tableId,
+        gameType: game.state.gameType,
+        bettingType: game.state.bettingType,
+        blinds: game.state.blinds,
+        playerCount: game.state.players.length,
+        maxPlayers: 9,
+        players: game.state.players.map(p => ({
+          odId: p.odId,
+          odName: p.odName,
+          seatIndex: p.seatIndex,
+        })),
+      });
+    }
+
+    return tables;
   }
 }
