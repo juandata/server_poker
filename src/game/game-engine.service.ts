@@ -18,22 +18,142 @@ import {
 const MAX_RAISES_PER_ROUND = 4;
 const ACTION_TIMEOUT_MS = 30000; // 30 seconds to act
 
+// Max players per game type
+const MAX_PLAYERS_BY_GAME: Record<GameType, number> = {
+  texas: 9,
+  short_deck: 9,
+  royal: 6,
+  omaha: 6,
+  omaha_hi_lo: 6,
+  courchevel: 6,
+  manila: 6,
+  pineapple: 6,
+  fast_fold: 6,
+};
+
+// Stake definitions for auto-creating default tables
+interface StakeDefinition {
+  label: string;
+  blinds: { small: number; big: number };
+  bettingType: BettingType;
+}
+
+const STAKES_BY_GAME: Record<GameType, StakeDefinition[]> = {
+  texas: [
+    { label: 'NL2', blinds: { small: 0.01, big: 0.02 }, bettingType: 'NL' },
+    { label: 'NL5', blinds: { small: 0.02, big: 0.05 }, bettingType: 'NL' },
+    { label: 'NL10', blinds: { small: 0.05, big: 0.10 }, bettingType: 'NL' },
+    { label: 'NL25', blinds: { small: 0.10, big: 0.25 }, bettingType: 'NL' },
+    { label: 'NL50', blinds: { small: 0.25, big: 0.50 }, bettingType: 'NL' },
+    { label: 'NL100', blinds: { small: 0.50, big: 1.00 }, bettingType: 'NL' },
+    { label: 'NL200', blinds: { small: 1, big: 2 }, bettingType: 'NL' },
+  ],
+  omaha: [
+    { label: 'PLO2', blinds: { small: 0.01, big: 0.02 }, bettingType: 'PL' },
+    { label: 'PLO5', blinds: { small: 0.02, big: 0.05 }, bettingType: 'PL' },
+    { label: 'PLO10', blinds: { small: 0.05, big: 0.10 }, bettingType: 'PL' },
+    { label: 'PLO25', blinds: { small: 0.10, big: 0.25 }, bettingType: 'PL' },
+    { label: 'PLO50', blinds: { small: 0.25, big: 0.50 }, bettingType: 'PL' },
+    { label: 'PLO100', blinds: { small: 0.50, big: 1.00 }, bettingType: 'PL' },
+  ],
+  omaha_hi_lo: [
+    { label: 'PLO8-2', blinds: { small: 0.01, big: 0.02 }, bettingType: 'PL' },
+    { label: 'PLO8-10', blinds: { small: 0.05, big: 0.10 }, bettingType: 'PL' },
+    { label: 'PLO8-25', blinds: { small: 0.10, big: 0.25 }, bettingType: 'PL' },
+  ],
+  short_deck: [
+    { label: 'NL10', blinds: { small: 0.05, big: 0.10 }, bettingType: 'NL' },
+    { label: 'NL25', blinds: { small: 0.10, big: 0.25 }, bettingType: 'NL' },
+    { label: 'NL50', blinds: { small: 0.25, big: 0.50 }, bettingType: 'NL' },
+  ],
+  courchevel: [
+    { label: 'PL10', blinds: { small: 0.05, big: 0.10 }, bettingType: 'PL' },
+    { label: 'PL25', blinds: { small: 0.10, big: 0.25 }, bettingType: 'PL' },
+  ],
+  royal: [
+    { label: 'NL25', blinds: { small: 0.10, big: 0.25 }, bettingType: 'NL' },
+    { label: 'NL50', blinds: { small: 0.25, big: 0.50 }, bettingType: 'NL' },
+  ],
+  manila: [
+    { label: 'NL25', blinds: { small: 0.10, big: 0.25 }, bettingType: 'NL' },
+    { label: 'NL50', blinds: { small: 0.25, big: 0.50 }, bettingType: 'NL' },
+  ],
+  pineapple: [
+    { label: 'NL25', blinds: { small: 0.10, big: 0.25 }, bettingType: 'NL' },
+    { label: 'NL50', blinds: { small: 0.25, big: 0.50 }, bettingType: 'NL' },
+  ],
+  fast_fold: [
+    { label: 'NL10', blinds: { small: 0.05, big: 0.10 }, bettingType: 'NL' },
+    { label: 'NL25', blinds: { small: 0.10, big: 0.25 }, bettingType: 'NL' },
+  ],
+};
+
 @Injectable()
 export class GameEngineService {
-  private games: Map<string, { state: GameState; deck: Card[] }> = new Map();
+  private games: Map<string, { state: GameState; deck: Card[]; maxPlayers: number; stakeLabel: string; isSystemTable: boolean }> = new Map();
+  private tableCounters: Map<string, number> = new Map(); // Track table numbers per stake
 
   constructor(
     private readonly deckService: DeckService,
     private readonly handEvaluator: HandEvaluatorService,
     private readonly antiCheat: AntiCheatService,
-  ) {}
+  ) {
+    // Create default tables on service initialization
+    this.createDefaultTables();
+  }
+
+  // Create one default table per stake for each game type
+  private createDefaultTables(): void {
+    console.log('[GameEngine] Creating default tables...');
+    for (const [gameType, stakes] of Object.entries(STAKES_BY_GAME)) {
+      for (const stake of stakes) {
+        const tableId = this.generateTableId(gameType as GameType, stake.label, true);
+        this.createGame(tableId, gameType as GameType, stake.bettingType, stake.blinds, stake.label, true);
+        console.log(`[GameEngine] Created default table: ${tableId}`);
+      }
+    }
+  }
+
+  // Generate a unique table ID
+  private generateTableId(gameType: GameType, stakeLabel: string, isSystemTable: boolean): string {
+    const key = `${gameType}-${stakeLabel}`;
+    const counter = (this.tableCounters.get(key) || 0) + 1;
+    this.tableCounters.set(key, counter);
+    const prefix = isSystemTable ? 'sys' : 'usr';
+    return `${prefix}-${gameType}-${stakeLabel}-${counter}`;
+  }
+
+  // Check if we need to create a new system table after a player joins
+  private ensureAvailableTable(gameType: GameType, stakeLabel: string, blinds: { small: number; big: number }, bettingType: BettingType): void {
+    // Find all tables for this game type and stake
+    const tablesForStake = Array.from(this.games.entries())
+      .filter(([_, game]) =>
+        game.state.gameType === gameType &&
+        game.stakeLabel === stakeLabel
+      );
+
+    // Check if there's at least one table with available seats
+    const hasAvailableTable = tablesForStake.some(([_, game]) =>
+      game.state.players.length < game.maxPlayers
+    );
+
+    // If no available tables, create a new system table
+    if (!hasAvailableTable) {
+      const newTableId = this.generateTableId(gameType, stakeLabel, true);
+      this.createGame(newTableId, gameType, bettingType, blinds, stakeLabel, true);
+      console.log(`[GameEngine] Auto-created new table (previous full): ${newTableId}`);
+    }
+  }
 
   createGame(
     tableId: string,
     gameType: GameType,
     bettingType: BettingType,
     blinds: { small: number; big: number },
+    stakeLabel: string = '',
+    isSystemTable: boolean = false,
   ): GameState {
+    const maxPlayers = MAX_PLAYERS_BY_GAME[gameType] || 9;
     const state: GameState = {
       tableId,
       stage: 'waiting',
@@ -51,13 +171,18 @@ export class GameEngineService {
       handNumber: 0,
       lastActionTimestamp: Date.now(),
     };
-    this.games.set(tableId, { state, deck: [] });
+    this.games.set(tableId, { state, deck: [], maxPlayers, stakeLabel, isSystemTable });
     return state;
   }
 
   addPlayer(tableId: string, odId: string, odName: string, buyIn: number, seatIndex: number): boolean {
     const game = this.games.get(tableId);
     if (!game) return false;
+
+    // Check if table is full
+    if (game.state.players.length >= game.maxPlayers) {
+      return false;
+    }
 
     const existingPlayer = game.state.players.find(p => p.odId === odId);
     if (existingPlayer) return false;
@@ -66,7 +191,7 @@ export class GameEngineService {
     const isSeatTaken = game.state.players.some(p => p.seatIndex === targetSeatIndex);
     if (isSeatTaken) {
       let foundFree = false;
-      for (let i = 0; i < 9; i++) {
+      for (let i = 0; i < game.maxPlayers; i++) {
         const taken = game.state.players.some(p => p.seatIndex === i);
         if (!taken) {
           targetSeatIndex = i;
@@ -94,6 +219,15 @@ export class GameEngineService {
 
     game.state.players.push(player);
     game.state.players.sort((a, b) => a.seatIndex - b.seatIndex);
+
+    // After adding player, ensure there's still an available table for this stake
+    this.ensureAvailableTable(
+      game.state.gameType,
+      game.stakeLabel,
+      game.state.blinds,
+      game.state.bettingType,
+    );
+
     return true;
   }
 
@@ -553,6 +687,8 @@ export class GameEngineService {
     blinds: { small: number; big: number };
     playerCount: number;
     maxPlayers: number;
+    stakeLabel: string;
+    isSystemTable: boolean;
     players: Array<{ odId: string; odName: string; seatIndex: number }>;
   }> {
     const tables: Array<{
@@ -562,6 +698,8 @@ export class GameEngineService {
       blinds: { small: number; big: number };
       playerCount: number;
       maxPlayers: number;
+      stakeLabel: string;
+      isSystemTable: boolean;
       players: Array<{ odId: string; odName: string; seatIndex: number }>;
     }> = [];
 
@@ -572,7 +710,9 @@ export class GameEngineService {
         bettingType: game.state.bettingType,
         blinds: game.state.blinds,
         playerCount: game.state.players.length,
-        maxPlayers: 9,
+        maxPlayers: game.maxPlayers,
+        stakeLabel: game.stakeLabel,
+        isSystemTable: game.isSystemTable,
         players: game.state.players.map(p => ({
           odId: p.odId,
           odName: p.odName,
@@ -582,5 +722,23 @@ export class GameEngineService {
     }
 
     return tables;
+  }
+
+  // Create a user-requested table
+  createUserTable(
+    gameType: GameType,
+    stakeLabel: string,
+    blinds: { small: number; big: number },
+    bettingType: BettingType,
+  ): string {
+    const tableId = this.generateTableId(gameType, stakeLabel, false);
+    this.createGame(tableId, gameType, bettingType, blinds, stakeLabel, false);
+    console.log(`[GameEngine] User created table: ${tableId}`);
+    return tableId;
+  }
+
+  // Get max players for a game type
+  getMaxPlayers(gameType: GameType): number {
+    return MAX_PLAYERS_BY_GAME[gameType] || 9;
   }
 }

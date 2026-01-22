@@ -258,6 +258,27 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return { success: true };
   }
 
+  @SubscribeMessage('createUserTable')
+  handleCreateUserTable(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: {
+      gameType: 'texas' | 'omaha' | 'omaha_hi_lo' | 'short_deck' | 'courchevel' | 'royal' | 'manila' | 'pineapple' | 'fast_fold';
+      stakeLabel: string;
+      blinds: { small: number; big: number };
+      bettingType: 'NL' | 'PL';
+    },
+  ) {
+    console.log(`[GameGateway] createUserTable request:`, payload);
+    const tableId = this.gameEngine.createUserTable(
+      payload.gameType,
+      payload.stakeLabel,
+      payload.blinds,
+      payload.bettingType,
+    );
+    this.broadcastTableList();
+    return { success: true, tableId };
+  }
+
   private broadcastTableList() {
     const tables = this.gameEngine.getAllTables();
     this.server.to('lobby').emit('tableList', tables);
