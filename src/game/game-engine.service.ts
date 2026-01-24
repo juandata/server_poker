@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DeckService } from './deck.service';
 import { HandEvaluatorService } from './hand-evaluator.service';
 import { AntiCheatService } from './anti-cheat.service';
+import { HandHistoryService } from './hand-history.service';
 import {
   Card,
   GameState,
@@ -97,6 +98,7 @@ export class GameEngineService {
     private readonly deckService: DeckService,
     private readonly handEvaluator: HandEvaluatorService,
     private readonly antiCheat: AntiCheatService,
+    private readonly handHistoryService: HandHistoryService,
   ) {
     // Create default tables on service initialization
     this.createDefaultTables();
@@ -228,6 +230,11 @@ export class GameEngineService {
       game.state.bettingType,
     );
 
+    // If we now have enough players, start the hand
+    if (game.state.players.length >= 2 && game.state.stage === 'waiting') {
+      this.startHand(tableId);
+    }
+
     return true;
   }
 
@@ -289,6 +296,8 @@ export class GameEngineService {
       player.holeCards = cards;
       game.deck = remainingDeck;
     }
+    
+    this.handHistoryService.startNewHand(tableId, state);
 
     // Post blinds
     const sbIndex = (state.dealerIndex + 1) % state.players.length;
@@ -469,6 +478,7 @@ export class GameEngineService {
     }
 
     state.lastActionTimestamp = Date.now();
+    this.handHistoryService.logAction(tableId, state.handNumber, action);
 
     // Check for hand end conditions and advance
     this.advanceGame(game);
@@ -586,10 +596,13 @@ export class GameEngineService {
     state.activePlayerIndex = -1;
 
     const activePlayers = state.players.filter(p => !p.folded);
+    let handWinners: Array<{ odId: string; amount: number; handRank: string }> = [];
 
     if (activePlayers.length === 1) {
       // Single winner - no showdown needed
-      activePlayers[0].odStack += state.pot;
+      const winnerPlayer = activePlayers[0];
+      winnerPlayer.odStack += state.pot;
+      handWinners = [{ odId: winnerPlayer.odId, amount: state.pot, handRank: 'unopposed' }];
     } else {
       // Determine winners
       const winners = this.handEvaluator.determineWinners(
@@ -604,11 +617,14 @@ export class GameEngineService {
       winners.forEach((w, i) => {
         const player = state.players.find(p => p.odId === w.odId);
         if (player) {
-          player.odStack += winAmount + (i === 0 ? remainder : 0);
+          const playerWinAmount = winAmount + (i === 0 ? remainder : 0);
+          player.odStack += playerWinAmount;
+          handWinners.push({ odId: w.odId, amount: playerWinAmount, handRank: w.hand.description });
         }
       });
     }
 
+    this.handHistoryService.logEndHand(game.state.tableId, state, handWinners);
     state.pot = 0;
   }
 
@@ -620,19 +636,21 @@ export class GameEngineService {
     const myPlayer = state.players.find(p => p.odId === odId);
     const mySeatIndex = myPlayer?.seatIndex ?? -1;
 
-    const clientPlayers: ClientPlayer[] = state.players.map(p => ({
-      odId: p.odId,
-      odName: p.odName,
-      odStack: p.odStack,
-      folded: p.folded,
-      hasActed: p.hasActed,
-      currentRoundBet: p.currentRoundBet,
-      seatIndex: p.seatIndex,
-      isAllIn: p.isAllIn,
-      isConnected: p.isConnected,
-      // Only show hole cards at showdown or if it's the player's own cards
-      holeCards: state.stage === 'showdown' && !p.folded ? p.holeCards : undefined,
-    }));
+    const clientPlayers: ClientPlayer[] = state.players
+      .filter(p => p.isConnected || (p.odStack > 0 && !p.folded)) // Only send connected players, or those with chips that haven't folded
+      .map(p => ({
+        odId: p.odId,
+        odName: p.odName,
+        odStack: p.odStack,
+        folded: p.folded,
+        hasActed: p.hasActed,
+        currentRoundBet: p.currentRoundBet,
+        seatIndex: p.seatIndex,
+        isAllIn: p.isAllIn,
+        isConnected: p.isConnected,
+        // Only show hole cards at showdown or if it's the player's own cards
+        holeCards: state.stage === 'showdown' && !p.folded ? p.holeCards : [],
+      }));
 
     return {
       tableId: state.tableId,
@@ -647,6 +665,7 @@ export class GameEngineService {
       myHoleCards: myPlayer?.holeCards || [],
       mySeatIndex,
       handNumber: state.handNumber,
+      gameType: state.gameType,
     };
   }
 

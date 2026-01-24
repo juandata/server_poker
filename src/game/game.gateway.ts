@@ -10,18 +10,25 @@ import {
 import { Server, Socket } from 'socket.io';
 import { GameEngineService } from './game-engine.service';
 import type { PlayerAction } from './game.types';
+import { UseGuards } from '@nestjs/common';
+import { SocketAuthGuard } from '../auth/socket-auth.guard';
+import { User } from '../users/schemas/user.schema';
+
+// Custom socket type
+interface AuthenticatedSocket extends Socket {
+  data: {
+    user: User;
+  };
+}
 
 interface JoinTablePayload {
   tableId: string;
-  odId: string;
-  odName: string;
   buyIn: number;
   seatIndex: number;
 }
 
 interface LeaveTablePayload {
   tableId: string;
-  odId: string;
 }
 
 interface CreateTablePayload {
@@ -31,9 +38,11 @@ interface CreateTablePayload {
   blinds: { small: number; big: number };
 }
 
+@UseGuards(SocketAuthGuard)
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: 'http://localhost:5173',
+    credentials: true,
   },
 })
 export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -44,11 +53,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   constructor(private readonly gameEngine: GameEngineService) {}
 
-  handleConnection(client: Socket) {
-    console.log(`[GameGateway] Client connected: ${client.id}`);
+  handleConnection(client: AuthenticatedSocket) {
+    console.log(`[GameGateway] Client connected: ${client.id} - user: ${client.data.user.displayName}`);
   }
 
-  handleDisconnect(client: Socket) {
+  handleDisconnect(client: AuthenticatedSocket) {
     console.log(`[GameGateway] Client disconnected: ${client.id}`);
     const playerInfo = this.playerSockets.get(client.id);
     if (playerInfo) {
@@ -60,7 +69,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('createTable')
   handleCreateTable(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: CreateTablePayload,
   ) {
     this.gameEngine.createGame(
@@ -76,10 +85,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('joinTable')
   handleJoinTable(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: JoinTablePayload,
   ) {
     console.log(`[GameGateway] joinTable request from socket ${client.id}:`, payload);
+    const user = client.data.user;
 
     // Auto-create table if it doesn't exist
     if (!this.gameEngine.getGame(payload.tableId)) {
@@ -94,16 +104,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const success = this.gameEngine.addPlayer(
       payload.tableId,
-      payload.odId,
-      payload.odName,
+      user.id,
+      user.displayName,
       payload.buyIn,
       payload.seatIndex,
     );
 
     if (success) {
       client.join(payload.tableId);
-      this.playerSockets.set(client.id, { odId: payload.odId, tableId: payload.tableId });
-      console.log(`[GameGateway] Player joined successfully, socket ${client.id} mapped to odId ${payload.odId}`);
+      this.playerSockets.set(client.id, { odId: user.id, tableId: payload.tableId });
+      console.log(`[GameGateway] Player joined successfully, socket ${client.id} mapped to odId ${user.id}`);
       this.broadcastGameState(payload.tableId);
       this.broadcastTableList();
       return { success: true };
@@ -115,10 +125,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('leaveTable')
   handleLeaveTable(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: LeaveTablePayload,
   ) {
-    const success = this.gameEngine.removePlayer(payload.tableId, payload.odId);
+    const user = client.data.user;
+    const success = this.gameEngine.removePlayer(payload.tableId, user.id);
     if (success) {
       client.leave(payload.tableId);
       this.playerSockets.delete(client.id);
@@ -130,7 +141,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('startHand')
   handleStartHand(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: { tableId: string },
   ) {
     const state = this.gameEngine.startHand(payload.tableId);
@@ -143,12 +154,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('action')
   handleAction(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: PlayerAction,
   ) {
-    // Validate that this socket owns this player
-    const playerInfo = this.playerSockets.get(client.id);
-    if (!playerInfo || playerInfo.odId !== payload.odId) {
+    const user = client.data.user;
+    if (user.id !== payload.odId) {
       return { success: false, error: 'Unauthorized action' };
     }
 
@@ -163,33 +173,25 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('getState')
   handleGetState(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { tableId: string; odId: string },
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { tableId: string },
   ) {
-    const state = this.gameEngine.getClientState(payload.tableId, payload.odId);
+    const user = client.data.user;
+    const state = this.gameEngine.getClientState(payload.tableId, user.id);
     return { success: !!state, state };
   }
 
   @SubscribeMessage('changeSeat')
   handleChangeSeat(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { tableId: string; odId: string; newSeatIndex: number },
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { tableId: string; newSeatIndex: number },
   ) {
     console.log(`[GameGateway] changeSeat request from socket ${client.id}:`, payload);
-    console.log(`[GameGateway] playerSockets entries:`, Array.from(this.playerSockets.entries()));
-
-    // Validate that this socket owns this player
-    const playerInfo = this.playerSockets.get(client.id);
-    console.log(`[GameGateway] Found playerInfo for socket:`, playerInfo);
-
-    if (!playerInfo || playerInfo.odId !== payload.odId) {
-      console.log(`[GameGateway] Unauthorized: playerInfo=${JSON.stringify(playerInfo)}, payload.odId=${payload.odId}`);
-      return { success: false, error: 'Unauthorized' };
-    }
+    const user = client.data.user;
 
     const success = this.gameEngine.changeSeat(
       payload.tableId,
-      payload.odId,
+      user.id,
       payload.newSeatIndex,
     );
 
@@ -204,8 +206,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('watchTable')
   handleWatchTable(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { tableId: string; odId: string },
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { tableId: string },
   ) {
     console.log(`[GameGateway] watchTable request from socket ${client.id}:`, payload);
 
@@ -231,7 +233,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('unwatchTable')
   handleUnwatchTable(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: { tableId: string },
   ) {
     client.leave(payload.tableId);
@@ -240,27 +242,27 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('getTables')
-  handleGetTables(@ConnectedSocket() client: Socket) {
+  handleGetTables(@ConnectedSocket() client: AuthenticatedSocket) {
     const tables = this.gameEngine.getAllTables();
     return { success: true, tables };
   }
 
   @SubscribeMessage('subscribeTables')
-  handleSubscribeTables(@ConnectedSocket() client: Socket) {
+  handleSubscribeTables(@ConnectedSocket() client: AuthenticatedSocket) {
     client.join('lobby');
     const tables = this.gameEngine.getAllTables();
     return { success: true, tables };
   }
 
   @SubscribeMessage('unsubscribeTables')
-  handleUnsubscribeTables(@ConnectedSocket() client: Socket) {
+  handleUnsubscribeTables(@ConnectedSocket() client: AuthenticatedSocket) {
     client.leave('lobby');
     return { success: true };
   }
 
   @SubscribeMessage('createUserTable')
   handleCreateUserTable(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: {
       gameType: 'texas' | 'omaha' | 'omaha_hi_lo' | 'short_deck' | 'courchevel' | 'royal' | 'manila' | 'pineapple' | 'fast_fold';
       stakeLabel: string;

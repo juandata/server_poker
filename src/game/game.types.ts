@@ -58,6 +58,7 @@ export interface ClientGameState {
   myHoleCards: Card[];
   mySeatIndex: number;
   handNumber: number;
+  gameType: GameType;
 }
 
 export interface ClientPlayer {
@@ -92,4 +93,14 @@ export interface HandResult {
   winners: { odId: string; amount: number; hand?: string }[];
   pot: number;
   showdownCards?: { odId: string; cards: Card[] }[];
+}
+
+export interface HandHistoryRecord {
+  handNumber: number;
+  players: Array<Pick<ServerPlayer, 'odId' | 'odName' | 'odStack' | 'holeCards'>>;
+  actions: PlayerAction[];
+  communityCards: Card[];
+  pot: number;
+  winners: Array<{ odId: string; amount: number; handRank: string }>;
+  timestamp: Date;
 }
