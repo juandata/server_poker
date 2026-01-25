@@ -54,7 +54,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(private readonly gameEngine: GameEngineService) {}
 
   handleConnection(client: AuthenticatedSocket) {
-    console.log(`[GameGateway] Client connected: ${client.id} - user: ${client.data.user.displayName}`);
+    const userName = client.data?.user?.displayName || 'Anonymous';
+    console.log(`[GameGateway] Client connected: ${client.id} - user: ${userName}`);
   }
 
   handleDisconnect(client: AuthenticatedSocket) {
@@ -89,7 +90,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: JoinTablePayload,
   ) {
     console.log(`[GameGateway] joinTable request from socket ${client.id}:`, payload);
-    const user = client.data.user;
+    const user = client.data?.user;
+
+    if (!user || !user._id) {
+      console.log(`[GameGateway] joinTable rejected - user not authenticated`);
+      return { success: false, error: 'Not authenticated' };
+    }
 
     // Auto-create table if it doesn't exist
     if (!this.gameEngine.getGame(payload.tableId)) {
@@ -104,16 +110,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const success = this.gameEngine.addPlayer(
       payload.tableId,
-      user.id,
-      user.displayName,
+      user._id.toString(),
+      user.displayName || 'Guest',
       payload.buyIn,
       payload.seatIndex,
     );
 
     if (success) {
       client.join(payload.tableId);
-      this.playerSockets.set(client.id, { odId: user.id, tableId: payload.tableId });
-      console.log(`[GameGateway] Player joined successfully, socket ${client.id} mapped to odId ${user.id}`);
+      this.playerSockets.set(client.id, { odId: user._id.toString(), tableId: payload.tableId });
+      console.log(`[GameGateway] Player joined successfully, socket ${client.id} mapped to odId ${user._id.toString()}`);
       this.broadcastGameState(payload.tableId);
       this.broadcastTableList();
       return { success: true };
@@ -128,8 +134,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: LeaveTablePayload,
   ) {
-    const user = client.data.user;
-    const success = this.gameEngine.removePlayer(payload.tableId, user.id);
+    const user = client.data?.user;
+    if (!user || !user._id) {
+      return { success: false, error: 'Not authenticated' };
+    }
+    const success = this.gameEngine.removePlayer(payload.tableId, user._id.toString());
     if (success) {
       client.leave(payload.tableId);
       this.playerSockets.delete(client.id);
@@ -157,8 +166,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: PlayerAction,
   ) {
-    const user = client.data.user;
-    if (user.id !== payload.odId) {
+    const user = client.data?.user;
+    if (!user || !user._id) {
+      return { success: false, error: 'Not authenticated' };
+    }
+    if (user._id.toString() !== payload.odId) {
       return { success: false, error: 'Unauthorized action' };
     }
 
@@ -176,8 +188,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: { tableId: string },
   ) {
-    const user = client.data.user;
-    const state = this.gameEngine.getClientState(payload.tableId, user.id);
+    const user = client.data?.user;
+    if (!user || !user._id) {
+      return { success: false, error: 'Not authenticated' };
+    }
+    const state = this.gameEngine.getClientState(payload.tableId, user._id.toString());
     return { success: !!state, state };
   }
 
@@ -187,11 +202,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: { tableId: string; newSeatIndex: number },
   ) {
     console.log(`[GameGateway] changeSeat request from socket ${client.id}:`, payload);
-    const user = client.data.user;
+    const user = client.data?.user;
+    if (!user || !user._id) {
+      return { success: false, error: 'Not authenticated' };
+    }
 
     const success = this.gameEngine.changeSeat(
       payload.tableId,
-      user.id,
+      user._id.toString(),
       payload.newSeatIndex,
     );
 

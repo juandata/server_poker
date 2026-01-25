@@ -37,7 +37,7 @@ export class HandHistoryService {
       timestamp: new Date(),
     };
 
-    const tableHistory = this.histories.get(tableId);
+    const tableHistory = this.histories.get(tableId)!;
     // Keep a reasonable limit, e.g., last 100 hands
     if (tableHistory.length > 100) {
       tableHistory.shift();

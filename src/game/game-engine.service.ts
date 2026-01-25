@@ -626,6 +626,9 @@ export class GameEngineService {
 
     this.handHistoryService.logEndHand(game.state.tableId, state, handWinners);
     state.pot = 0;
+
+    // Cleanup: Remove disconnected and folded players, or players with 0 stack
+    state.players = state.players.filter(p => p.isConnected || (p.odStack > 0 && !p.folded));
   }
 
   getClientState(tableId: string, odId: string): ClientGameState | null {
@@ -637,7 +640,7 @@ export class GameEngineService {
     const mySeatIndex = myPlayer?.seatIndex ?? -1;
 
     const clientPlayers: ClientPlayer[] = state.players
-      .filter(p => p.isConnected || (p.odStack > 0 && !p.folded)) // Only send connected players, or those with chips that haven't folded
+      .filter(p => p.isConnected) // Only send connected players
       .map(p => ({
         odId: p.odId,
         odName: p.odName,
@@ -728,15 +731,17 @@ export class GameEngineService {
         gameType: game.state.gameType,
         bettingType: game.state.bettingType,
         blinds: game.state.blinds,
-        playerCount: game.state.players.length,
+        playerCount: game.state.players.filter(p => p.isConnected).length,
         maxPlayers: game.maxPlayers,
         stakeLabel: game.stakeLabel,
         isSystemTable: game.isSystemTable,
-        players: game.state.players.map(p => ({
-          odId: p.odId,
-          odName: p.odName,
-          seatIndex: p.seatIndex,
-        })),
+        players: game.state.players
+          .filter(p => p.isConnected)
+          .map(p => ({
+            odId: p.odId,
+            odName: p.odName,
+            seatIndex: p.seatIndex,
+          })),
       });
     }
 

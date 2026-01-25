@@ -17,5 +17,6 @@ import { GoogleSilentStrategy } from './google.silent.strategy';
   ],
   controllers: [AuthController],
   providers: [AuthService, GoogleStrategy, GoogleSilentStrategy],
+  exports: [AuthService],
 })
 export class AuthModule {}
