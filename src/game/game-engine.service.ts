@@ -284,8 +284,17 @@ export class GameEngineService {
       console.log(`[GameEngine] startHand: game not found for ${tableId}`);
       return null;
     }
+
+    // Clean up disconnected players and players with no stack before starting
+    const initialPlayerCount = game.state.players.length;
+    game.state.players = game.state.players.filter(p => p.isConnected && p.odStack > 0);
+    if (game.state.players.length < initialPlayerCount) {
+      console.log(`[GameEngine] startHand: Removed ${initialPlayerCount - game.state.players.length} disconnected/broke players`);
+    }
+
     if (game.state.players.length < 2) {
       console.log(`[GameEngine] startHand: not enough players (${game.state.players.length})`);
+      game.state.stage = 'waiting';
       return null;
     }
 
@@ -666,8 +675,14 @@ export class GameEngineService {
     this.handHistoryService.logEndHand(game.state.tableId, state, handWinners);
     state.pot = 0;
 
-    // Cleanup: Remove disconnected and folded players, or players with 0 stack
-    state.players = state.players.filter(p => p.isConnected || (p.odStack > 0 && !p.folded));
+    // Cleanup: Remove disconnected players and players with 0 stack
+    state.players = state.players.filter(p => p.isConnected && p.odStack > 0);
+
+    // If less than 2 players remain, go back to waiting
+    if (state.players.length < 2) {
+      console.log(`[GameEngine] endHand: Not enough players (${state.players.length}), setting stage to waiting`);
+      state.stage = 'waiting';
+    }
   }
 
   getClientState(tableId: string, odId: string): ClientGameState | null {
