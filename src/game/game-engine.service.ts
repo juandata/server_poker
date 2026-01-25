@@ -179,29 +179,49 @@ export class GameEngineService {
 
   addPlayer(tableId: string, odId: string, odName: string, buyIn: number, seatIndex: number): boolean {
     const game = this.games.get(tableId);
-    if (!game) return false;
-
-    // Check if table is full
-    if (game.state.players.length >= game.maxPlayers) {
+    if (!game) {
+      console.log(`[GameEngine] addPlayer: game not found for ${tableId}`);
       return false;
     }
 
     const existingPlayer = game.state.players.find(p => p.odId === odId);
-    if (existingPlayer) return false;
+
+    // If player exists but is disconnected, reconnect them
+    if (existingPlayer) {
+      if (!existingPlayer.isConnected) {
+        console.log(`[GameEngine] addPlayer: Reconnecting player ${odId} at seat ${existingPlayer.seatIndex}`);
+        existingPlayer.isConnected = true;
+        existingPlayer.lastActionTime = Date.now();
+        return true;
+      }
+      console.log(`[GameEngine] addPlayer: Player ${odId} already connected`);
+      return false;
+    }
+
+    // Check if table is full
+    if (game.state.players.length >= game.maxPlayers) {
+      console.log(`[GameEngine] addPlayer: Table full (${game.state.players.length}/${game.maxPlayers})`);
+      return false;
+    }
 
     let targetSeatIndex = seatIndex;
     const isSeatTaken = game.state.players.some(p => p.seatIndex === targetSeatIndex);
     if (isSeatTaken) {
+      console.log(`[GameEngine] addPlayer: Seat ${targetSeatIndex} is taken, finding free seat`);
       let foundFree = false;
       for (let i = 0; i < game.maxPlayers; i++) {
         const taken = game.state.players.some(p => p.seatIndex === i);
         if (!taken) {
           targetSeatIndex = i;
           foundFree = true;
+          console.log(`[GameEngine] addPlayer: Found free seat ${i}`);
           break;
         }
       }
-      if (!foundFree) return false;
+      if (!foundFree) {
+        console.log(`[GameEngine] addPlayer: No free seats found`);
+        return false;
+      }
     }
 
     const player: ServerPlayer = {
@@ -232,7 +252,10 @@ export class GameEngineService {
 
     // If we now have enough players, start the hand
     if (game.state.players.length >= 2 && game.state.stage === 'waiting') {
+      console.log(`[GameEngine] addPlayer: 2+ players present, auto-starting hand`);
       this.startHand(tableId);
+    } else {
+      console.log(`[GameEngine] addPlayer: Not auto-starting. Players: ${game.state.players.length}, Stage: ${game.state.stage}`);
     }
 
     return true;
@@ -257,10 +280,19 @@ export class GameEngineService {
 
   startHand(tableId: string): GameState | null {
     const game = this.games.get(tableId);
-    if (!game) return null;
-    if (game.state.players.length < 2) return null;
+    if (!game) {
+      console.log(`[GameEngine] startHand: game not found for ${tableId}`);
+      return null;
+    }
+    if (game.state.players.length < 2) {
+      console.log(`[GameEngine] startHand: not enough players (${game.state.players.length})`);
+      return null;
+    }
 
     const { state } = game;
+
+    console.log(`[GameEngine] startHand: Starting hand #${state.handNumber + 1} for table ${tableId}`);
+    console.log(`[GameEngine] startHand: Players:`, state.players.map(p => ({ name: p.odName, stack: p.odStack })));
 
     // Reset for new hand
     state.handNumber++;
@@ -320,6 +352,8 @@ export class GameEngineService {
       game.deck = remainingDeck;
     }
 
+    console.log(`[GameEngine] startHand: Hand started. Stage: ${state.stage}, ActivePlayer: ${state.activePlayerIndex}, Pot: ${state.pot}`);
+
     return state;
   }
 
@@ -346,14 +380,18 @@ export class GameEngineService {
   }
 
   processAction(tableId: string, action: PlayerAction): ActionResult {
+    console.log(`[GameEngine] processAction: ${action.action} from ${action.odId}, amount: ${action.amount || 0}`);
+
     const game = this.games.get(tableId);
     if (!game) return { success: false, error: 'Game not found' };
 
     const { state } = game;
+    console.log(`[GameEngine] processAction: Stage: ${state.stage}, ActivePlayer: ${state.activePlayerIndex}, Pot: ${state.pot}`);
 
     // Anti-cheat validation
     const validation = this.antiCheat.validateAction(state, action);
     if (!validation.valid) {
+      console.log(`[GameEngine] processAction: Action rejected - ${validation.reason}`);
       return { success: false, error: validation.reason || 'Action rejected' };
     }
     const playerIndex = state.players.findIndex(p => p.odId === action.odId);
@@ -592,6 +630,7 @@ export class GameEngineService {
 
   private endHand(game: { state: GameState; deck: Card[] }): void {
     const { state } = game;
+    console.log(`[GameEngine] endHand: Ending hand #${state.handNumber} for table ${state.tableId}`);
     state.stage = 'showdown';
     state.activePlayerIndex = -1;
 

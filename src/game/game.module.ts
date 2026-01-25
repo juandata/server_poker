@@ -6,7 +6,6 @@ import { HandEvaluatorService } from './hand-evaluator.service';
 import { AntiCheatService } from './anti-cheat.service';
 import { HandHistoryService } from './hand-history.service';
 import { AuthModule } from '../auth/auth.module';
-import { SocketAuthGuard } from '../auth/socket-auth.guard';
 
 @Module({
   imports: [AuthModule],
@@ -17,7 +16,6 @@ import { SocketAuthGuard } from '../auth/socket-auth.guard';
     HandEvaluatorService,
     AntiCheatService,
     HandHistoryService,
-    SocketAuthGuard,
   ],
   exports: [GameEngineService, AntiCheatService, HandHistoryService],
 })

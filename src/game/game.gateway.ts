@@ -2,6 +2,7 @@ import {
   WebSocketGateway,
   WebSocketServer,
   SubscribeMessage,
+  OnGatewayInit,
   OnGatewayConnection,
   OnGatewayDisconnect,
   ConnectedSocket,
@@ -10,14 +11,19 @@ import {
 import { Server, Socket } from 'socket.io';
 import { GameEngineService } from './game-engine.service';
 import type { PlayerAction } from './game.types';
-import { UseGuards } from '@nestjs/common';
-import { SocketAuthGuard } from '../auth/socket-auth.guard';
-import { User } from '../users/schemas/user.schema';
+import { AuthService } from '../auth/auth.service';
 
-// Custom socket type
+// Custom socket type - matches what AuthService.meFromToken returns
+interface AuthenticatedUser {
+  id: string;
+  email: string;
+  displayName?: string;
+  avatarUrl?: string;
+}
+
 interface AuthenticatedSocket extends Socket {
   data: {
-    user: User;
+    user?: AuthenticatedUser;
   };
 }
 
@@ -38,33 +44,95 @@ interface CreateTablePayload {
   blinds: { small: number; big: number };
 }
 
-@UseGuards(SocketAuthGuard)
 @WebSocketGateway({
   cors: {
     origin: 'http://localhost:5173',
     credentials: true,
   },
 })
-export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
   private playerSockets: Map<string, { odId: string; tableId: string }> = new Map();
+  private disconnectTimeouts: Map<string, NodeJS.Timeout> = new Map(); // Grace period for reconnection
 
-  constructor(private readonly gameEngine: GameEngineService) {}
+  constructor(
+    private readonly gameEngine: GameEngineService,
+    private readonly authService: AuthService,
+  ) {}
+
+  // Set up authentication middleware BEFORE any messages are processed
+  afterInit(server: Server) {
+    server.use(async (socket: AuthenticatedSocket, next) => {
+      const cookieHeader = socket.handshake.headers['cookie'];
+
+      if (cookieHeader) {
+        const token = cookieHeader
+          .split(';')
+          .map((s) => s.trim())
+          .find((s) => s.startsWith('access_token='))
+          ?.split('=')[1];
+
+        if (token) {
+          try {
+            const user = await this.authService.meFromToken(token);
+            if (user) {
+              socket.data = { user };
+              console.log(`[GameGateway] Socket authenticated: ${socket.id} - user: ${user.displayName || user.email}`);
+            }
+          } catch (err) {
+            console.error(`[GameGateway] Auth middleware error:`, err);
+          }
+        }
+      }
+
+      // Always allow connection (authentication is optional for spectating)
+      next();
+    });
+    console.log('[GameGateway] WebSocket server initialized with auth middleware');
+  }
 
   handleConnection(client: AuthenticatedSocket) {
-    const userName = client.data?.user?.displayName || 'Anonymous';
-    console.log(`[GameGateway] Client connected: ${client.id} - user: ${userName}`);
+    const userName = client.data?.user?.displayName || client.data?.user?.email || 'Anonymous';
+    const odId = client.data?.user?.id;
+    console.log(`[GameGateway] Client connected: ${client.id} - user: ${userName} (odId: ${odId})`);
+
+    // Cancel any pending disconnect timeout for this user (reconnection scenario)
+    if (odId) {
+      const existingTimeout = this.disconnectTimeouts.get(odId);
+      if (existingTimeout) {
+        console.log(`[GameGateway] Cancelling pending disconnect for user ${odId} - reconnected`);
+        clearTimeout(existingTimeout);
+        this.disconnectTimeouts.delete(odId);
+      }
+    }
   }
 
   handleDisconnect(client: AuthenticatedSocket) {
     console.log(`[GameGateway] Client disconnected: ${client.id}`);
     const playerInfo = this.playerSockets.get(client.id);
     if (playerInfo) {
-      this.gameEngine.removePlayer(playerInfo.tableId, playerInfo.odId);
+      // Use a grace period before removing the player (allows for reconnection)
+      const DISCONNECT_GRACE_PERIOD_MS = 5000; // 5 seconds
+
+      console.log(`[GameGateway] Starting ${DISCONNECT_GRACE_PERIOD_MS}ms grace period for player ${playerInfo.odId}`);
+
+      // Clear any existing timeout for this user
+      const existingTimeout = this.disconnectTimeouts.get(playerInfo.odId);
+      if (existingTimeout) {
+        clearTimeout(existingTimeout);
+      }
+
+      const timeout = setTimeout(() => {
+        console.log(`[GameGateway] Grace period expired for player ${playerInfo.odId}, removing from table`);
+        this.gameEngine.removePlayer(playerInfo.tableId, playerInfo.odId);
+        this.disconnectTimeouts.delete(playerInfo.odId);
+        this.broadcastGameState(playerInfo.tableId);
+      }, DISCONNECT_GRACE_PERIOD_MS);
+
+      this.disconnectTimeouts.set(playerInfo.odId, timeout);
       this.playerSockets.delete(client.id);
-      this.broadcastGameState(playerInfo.tableId);
     }
   }
 
@@ -92,9 +160,17 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     console.log(`[GameGateway] joinTable request from socket ${client.id}:`, payload);
     const user = client.data?.user;
 
-    if (!user || !user._id) {
+    if (!user || !user.id) {
       console.log(`[GameGateway] joinTable rejected - user not authenticated`);
       return { success: false, error: 'Not authenticated' };
+    }
+
+    // Cancel any pending disconnect timeout for this user
+    const existingTimeout = this.disconnectTimeouts.get(user.id);
+    if (existingTimeout) {
+      console.log(`[GameGateway] Cancelling pending disconnect for user ${user.id} - rejoining table`);
+      clearTimeout(existingTimeout);
+      this.disconnectTimeouts.delete(user.id);
     }
 
     // Auto-create table if it doesn't exist
@@ -110,7 +186,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const success = this.gameEngine.addPlayer(
       payload.tableId,
-      user._id.toString(),
+      user.id,
       user.displayName || 'Guest',
       payload.buyIn,
       payload.seatIndex,
@@ -118,8 +194,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     if (success) {
       client.join(payload.tableId);
-      this.playerSockets.set(client.id, { odId: user._id.toString(), tableId: payload.tableId });
-      console.log(`[GameGateway] Player joined successfully, socket ${client.id} mapped to odId ${user._id.toString()}`);
+      this.playerSockets.set(client.id, { odId: user.id, tableId: payload.tableId });
+      console.log(`[GameGateway] Player joined successfully, socket ${client.id} mapped to odId ${user.id}`);
       this.broadcastGameState(payload.tableId);
       this.broadcastTableList();
       return { success: true };
@@ -135,10 +211,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: LeaveTablePayload,
   ) {
     const user = client.data?.user;
-    if (!user || !user._id) {
+    if (!user || !user.id) {
       return { success: false, error: 'Not authenticated' };
     }
-    const success = this.gameEngine.removePlayer(payload.tableId, user._id.toString());
+    const success = this.gameEngine.removePlayer(payload.tableId, user.id);
     if (success) {
       client.leave(payload.tableId);
       this.playerSockets.delete(client.id);
@@ -167,10 +243,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: PlayerAction,
   ) {
     const user = client.data?.user;
-    if (!user || !user._id) {
+    if (!user || !user.id) {
       return { success: false, error: 'Not authenticated' };
     }
-    if (user._id.toString() !== payload.odId) {
+    if (user.id !== payload.odId) {
       return { success: false, error: 'Unauthorized action' };
     }
 
@@ -189,10 +265,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: { tableId: string },
   ) {
     const user = client.data?.user;
-    if (!user || !user._id) {
+    if (!user || !user.id) {
       return { success: false, error: 'Not authenticated' };
     }
-    const state = this.gameEngine.getClientState(payload.tableId, user._id.toString());
+    const state = this.gameEngine.getClientState(payload.tableId, user.id);
     return { success: !!state, state };
   }
 
@@ -203,13 +279,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     console.log(`[GameGateway] changeSeat request from socket ${client.id}:`, payload);
     const user = client.data?.user;
-    if (!user || !user._id) {
+    if (!user || !user.id) {
       return { success: false, error: 'Not authenticated' };
     }
 
     const success = this.gameEngine.changeSeat(
       payload.tableId,
-      user._id.toString(),
+      user.id,
       payload.newSeatIndex,
     );
 
@@ -228,6 +304,17 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: { tableId: string },
   ) {
     console.log(`[GameGateway] watchTable request from socket ${client.id}:`, payload);
+    const user = client.data?.user;
+
+    // Cancel any pending disconnect timeout for this user (reconnection scenario)
+    if (user?.id) {
+      const existingTimeout = this.disconnectTimeouts.get(user.id);
+      if (existingTimeout) {
+        console.log(`[GameGateway] Cancelling pending disconnect for user ${user.id} - watching table again`);
+        clearTimeout(existingTimeout);
+        this.disconnectTimeouts.delete(user.id);
+      }
+    }
 
     // Auto-create table if it doesn't exist
     if (!this.gameEngine.getGame(payload.tableId)) {
@@ -244,9 +331,27 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.join(payload.tableId);
     console.log(`[GameGateway] Client ${client.id} now watching table ${payload.tableId}`);
 
-    // Return spectator state
-    const state = this.gameEngine.getClientState(payload.tableId, '__spectator__');
-    return { success: true, state };
+    // If user is authenticated, check if they're a player at this table and reconnect them
+    let wasReconnected = false;
+    if (user?.id) {
+      const game = this.gameEngine.getGame(payload.tableId);
+      const existingPlayer = game?.state.players.find(p => p.odId === user.id);
+
+      if (existingPlayer && !existingPlayer.isConnected) {
+        console.log(`[GameGateway] Reconnecting player ${user.id} to seat ${existingPlayer.seatIndex}`);
+        existingPlayer.isConnected = true;
+        existingPlayer.lastActionTime = Date.now();
+        this.playerSockets.set(client.id, { odId: user.id, tableId: payload.tableId });
+        wasReconnected = true;
+        this.broadcastGameState(payload.tableId);
+      }
+    }
+
+    // Return personalized state if user is seated, otherwise spectator state
+    const state = user?.id
+      ? this.gameEngine.getClientState(payload.tableId, user.id)
+      : this.gameEngine.getClientState(payload.tableId, '__spectator__');
+    return { success: true, state, wasReconnected };
   }
 
   @SubscribeMessage('unwatchTable')
@@ -306,23 +411,42 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private broadcastGameState(tableId: string) {
     const game = this.gameEngine.getGame(tableId);
-    if (!game) return;
+    if (!game) {
+      console.log(`[GameGateway] broadcastGameState: Game not found for ${tableId}`);
+      return;
+    }
+    console.log(`[GameGateway] broadcastGameState: Table ${tableId}, Stage: ${game.state.stage}, Players: ${game.state.players.length}`);
+    console.log(`[GameGateway] broadcastGameState: Players in game:`, game.state.players.map(p => ({ odId: p.odId, odName: p.odName, isConnected: p.isConnected, seatIndex: p.seatIndex })));
+    console.log(`[GameGateway] broadcastGameState: Active sockets:`, Array.from(this.playerSockets.entries()).map(([socketId, info]) => ({ socketId, odId: info.odId, tableId: info.tableId })));
 
     // Send personalized state to each player (they only see their own cards)
     for (const player of game.state.players) {
       const clientState = this.gameEngine.getClientState(tableId, player.odId);
-      
+
+      if (!clientState) {
+        console.log(`[GameGateway] WARNING: Could not get client state for player ${player.odName} (${player.odId})`);
+        continue;
+      }
+
       // Find socket for this player
+      let foundSocket = false;
       for (const [socketId, info] of this.playerSockets.entries()) {
         if (info.odId === player.odId && info.tableId === tableId) {
+          console.log(`[GameGateway] Sending gameState to player ${player.odName} (${player.odId}) via socket ${socketId}`);
+          console.log(`[GameGateway] State for ${player.odName}:`, { stage: clientState.stage, players: clientState.players.length, myHoleCards: clientState.myHoleCards?.length });
           this.server.to(socketId).emit('gameState', clientState);
+          foundSocket = true;
           break;
         }
+      }
+      if (!foundSocket) {
+        console.log(`[GameGateway] WARNING: No socket found for player ${player.odName} (${player.odId})`);
       }
     }
 
     // Also broadcast a spectator view (no hole cards)
     const spectatorState = this.gameEngine.getClientState(tableId, '__spectator__');
+    console.log(`[GameGateway] Broadcasting spectatorState to room ${tableId}`);
     this.server.to(tableId).emit('spectatorState', spectatorState);
   }
 }

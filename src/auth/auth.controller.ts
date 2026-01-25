@@ -18,7 +18,7 @@ export class AuthController {
       dto.password,
       dto.displayName,
     );
-    res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax' });
+    res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax', path: '/' });
     return user;
   }
 
@@ -28,7 +28,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { user, token } = await this.auth.login(dto.email, dto.password);
-    res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax' });
+    res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax', path: '/' });
     return user;
   }
 
@@ -58,7 +58,7 @@ export class AuthController {
   async googleAuthRedirect(@Req() req, @Res({ passthrough: true }) res: Response) {
     const { user } = req;
     const token = await this.auth.generateToken(user);
-    res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax' });
+    res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax', path: '/' });
     res.redirect('http://localhost:5173/');
   }
 
@@ -71,7 +71,7 @@ export class AuthController {
   async googleAuthSilentRedirect(@Req() req, @Res({ passthrough: true }) res: Response) {
     const { user } = req;
     const token = await this.auth.generateToken(user);
-    res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax' });
+    res.cookie('access_token', token, { httpOnly: true, sameSite: 'lax', path: '/' });
     res.redirect('http://localhost:5173/');
   }
   @Post('google/revoke')
