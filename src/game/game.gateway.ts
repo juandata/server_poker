@@ -60,7 +60,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   constructor(
     private readonly gameEngine: GameEngineService,
     private readonly authService: AuthService,
-  ) {}
+  ) { }
 
   // Set up authentication middleware BEFORE any messages are processed
   afterInit(server: Server) {
@@ -415,7 +415,9 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       console.log(`[GameGateway] broadcastGameState: Game not found for ${tableId}`);
       return;
     }
+    console.log(`[GameGateway] ========== BROADCAST START ${new Date().toISOString()} ==========`);
     console.log(`[GameGateway] broadcastGameState: Table ${tableId}, Stage: ${game.state.stage}, Players: ${game.state.players.length}`);
+    console.log(`[GameGateway] broadcastGameState: Pot: ${game.state.pot}, CurrentHighBet: ${game.state.currentHighBet}, ActivePlayer: ${game.state.activePlayerIndex}`);
     console.log(`[GameGateway] broadcastGameState: Players in game:`, game.state.players.map(p => ({ odId: p.odId, odName: p.odName, isConnected: p.isConnected, seatIndex: p.seatIndex })));
     console.log(`[GameGateway] broadcastGameState: Active sockets:`, Array.from(this.playerSockets.entries()).map(([socketId, info]) => ({ socketId, odId: info.odId, tableId: info.tableId })));
 
@@ -432,8 +434,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       let foundSocket = false;
       for (const [socketId, info] of this.playerSockets.entries()) {
         if (info.odId === player.odId && info.tableId === tableId) {
-          console.log(`[GameGateway] Sending gameState to player ${player.odName} (${player.odId}) via socket ${socketId}`);
-          console.log(`[GameGateway] State for ${player.odName}:`, { stage: clientState.stage, players: clientState.players.length, myHoleCards: clientState.myHoleCards?.length });
+          console.log(`[GameGateway] 📤 Sending gameState to player ${player.odName} (${player.odId}) via socket ${socketId}`);
+          console.log(`[GameGateway]    State: stage=${clientState.stage}, pot=${clientState.pot}, players=${clientState.players.length}, myCards=${clientState.myHoleCards?.length}`);
           this.server.to(socketId).emit('gameState', clientState);
           foundSocket = true;
           break;
@@ -446,7 +448,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     // Also broadcast a spectator view (no hole cards)
     const spectatorState = this.gameEngine.getClientState(tableId, '__spectator__');
-    console.log(`[GameGateway] Broadcasting spectatorState to room ${tableId}`);
+    console.log(`[GameGateway] 📤 Broadcasting spectatorState to room ${tableId}`);
+    console.log(`[GameGateway] ========== BROADCAST END ==========`);
     this.server.to(tableId).emit('spectatorState', spectatorState);
   }
 }
