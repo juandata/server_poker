@@ -337,7 +337,7 @@ export class GameEngineService {
       player.holeCards = cards;
       game.deck = remainingDeck;
     }
-    
+
     this.handHistoryService.startNewHand(tableId, state);
 
     // Post blinds
@@ -675,6 +675,9 @@ export class GameEngineService {
     this.handHistoryService.logEndHand(game.state.tableId, state, handWinners);
     state.pot = 0;
 
+    // Save winners to state for client display
+    state.winners = handWinners;
+
     // Cleanup: Remove disconnected players and players with 0 stack
     state.players = state.players.filter(p => p.isConnected && p.odStack > 0);
 
@@ -682,6 +685,17 @@ export class GameEngineService {
     if (state.players.length < 2) {
       console.log(`[GameEngine] endHand: Not enough players (${state.players.length}), setting stage to waiting`);
       state.stage = 'waiting';
+      state.winners = undefined; // Clear winners when going to waiting
+    } else {
+      // Auto-start next hand after 5 seconds
+      console.log(`[GameEngine] endHand: Scheduling next hand in 5 seconds`);
+      setTimeout(() => {
+        const currentGame = this.games.get(state.tableId);
+        if (currentGame && currentGame.state.stage === 'showdown') {
+          console.log(`[GameEngine] endHand: Auto-starting next hand`);
+          this.startHand(state.tableId);
+        }
+      }, 5000);
     }
   }
 
@@ -723,6 +737,7 @@ export class GameEngineService {
       mySeatIndex,
       handNumber: state.handNumber,
       gameType: state.gameType,
+      winners: state.winners,
     };
   }
 
