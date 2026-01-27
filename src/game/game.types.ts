@@ -42,6 +42,10 @@ export interface GameState {
   lastRaiseAmount: number;
   handNumber: number;
   lastActionTimestamp: number;
+  lastAction?: {
+    seatIndex: number;
+    text: string;
+  };
   winners?: Array<{ odId: string; amount: number; handRank: string }>; // Populated at showdown
 }
 
@@ -61,6 +65,10 @@ export interface ClientGameState {
   handNumber: number;
   gameType: GameType;
   winners?: Array<{ odId: string; amount: number; handRank: string }>; // Populated at showdown
+  lastAction?: {
+    seatIndex: number;
+    text: string;
+  };
 }
 
 export interface ClientPlayer {

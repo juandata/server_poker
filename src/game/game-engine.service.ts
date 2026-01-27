@@ -310,7 +310,9 @@ export class GameEngineService {
     state.communityCards = [];
     state.currentHighBet = 0;
     state.raisesThisRound = 0;
+    state.raisesThisRound = 0;
     state.lastRaiseAmount = 0;
+    delete state.lastAction; // Reset lastAction logic
 
     // Create and shuffle new deck
     game.deck = this.deckService.createShuffledDeck(state.gameType);
@@ -429,6 +431,7 @@ export class GameEngineService {
       case 'fold':
         player.folded = true;
         player.hasActed = true;
+        state.lastAction = { seatIndex: playerIndex, text: 'FOLD' };
         break;
 
       case 'check':
@@ -436,6 +439,7 @@ export class GameEngineService {
           return { success: false, error: 'Cannot check - must call or fold' };
         }
         player.hasActed = true;
+        state.lastAction = { seatIndex: playerIndex, text: 'CHECK' };
         break;
 
       case 'call':
@@ -446,6 +450,7 @@ export class GameEngineService {
         state.pot += callAmount;
         player.hasActed = true;
         if (player.odStack === 0) player.isAllIn = true;
+        state.lastAction = { seatIndex: playerIndex, text: 'CALL' };
         break;
 
       case 'raise':
@@ -495,30 +500,34 @@ export class GameEngineService {
 
         player.hasActed = true;
         if (player.odStack === 0) player.isAllIn = true;
+        state.lastAction = { seatIndex: playerIndex, text: `RAISE ${raiseTotal}` };
         break;
 
       case 'allin':
         const allInAmount = player.odStack;
-        const newTotal = player.currentRoundBet + allInAmount;
-        player.odStack = 0;
-        player.currentRoundBet = newTotal;
-        player.totalBetThisHand += allInAmount;
-        state.pot += allInAmount;
-        player.isAllIn = true;
-        player.hasActed = true;
-
-        if (newTotal > state.currentHighBet) {
-          const increment = newTotal - state.currentHighBet;
-          state.currentHighBet = newTotal;
-          state.lastRaiseAmount = increment;
-          state.raisesThisRound++;
+        // Raise logic if amount > currentHighBet
+        if (player.currentRoundBet + allInAmount > state.currentHighBet) {
+          const actualRaise = (player.currentRoundBet + allInAmount) - state.currentHighBet;
+          state.lastRaiseAmount = actualRaise; // Even if less than min raise, valid for all-in
+          state.currentHighBet = player.currentRoundBet + allInAmount;
+          state.raisesThisRound++; // Count as raise? Usually yes.
+          // Reset hasActed
           state.players.forEach((p, i) => {
             if (i !== playerIndex && !p.folded && !p.isAllIn) {
               p.hasActed = false;
             }
           });
         }
+
+        player.odStack = 0;
+        player.currentRoundBet += allInAmount;
+        player.totalBetThisHand += allInAmount;
+        state.pot += allInAmount;
+        player.isAllIn = true;
+        player.hasActed = true;
+        state.lastAction = { seatIndex: playerIndex, text: 'ALL IN' };
         break;
+
 
       default:
         return { success: false, error: 'Invalid action' };
@@ -546,7 +555,7 @@ export class GameEngineService {
     // Check if betting round is complete
     const playersToAct = state.players.filter(p => !p.folded && !p.isAllIn);
     const allActed = playersToAct.every(p => p.hasActed);
-    const betsEqual = playersToAct.every(p => p.currentRoundBet === state.currentHighBet);
+    const betsEqual = playersToAct.every(p => Math.abs(p.currentRoundBet - state.currentHighBet) < 0.01);
 
     if (allActed && betsEqual) {
       // Check if all but one are all-in (runout)
@@ -729,6 +738,7 @@ export class GameEngineService {
       handNumber: state.handNumber,
       gameType: state.gameType,
       winners: state.winners,
+      lastAction: state.lastAction,
     };
   }
 
