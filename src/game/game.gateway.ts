@@ -56,6 +56,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
   private playerSockets: Map<string, { odId: string; tableId: string }> = new Map();
   private disconnectTimeouts: Map<string, NodeJS.Timeout> = new Map(); // Grace period for reconnection
+  private nextHandTimeouts: Map<string, NodeJS.Timeout> = new Map(); // Auto-start next hand timers
 
   constructor(
     private readonly gameEngine: GameEngineService,
@@ -411,45 +412,58 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
   private broadcastGameState(tableId: string) {
     const game = this.gameEngine.getGame(tableId);
-    if (!game) {
-      console.log(`[GameGateway] broadcastGameState: Game not found for ${tableId}`);
-      return;
-    }
-    console.log(`[GameGateway] ========== BROADCAST START ${new Date().toISOString()} ==========`);
-    console.log(`[GameGateway] broadcastGameState: Table ${tableId}, Stage: ${game.state.stage}, Players: ${game.state.players.length}`);
-    console.log(`[GameGateway] broadcastGameState: Pot: ${game.state.pot}, CurrentHighBet: ${game.state.currentHighBet}, ActivePlayer: ${game.state.activePlayerIndex}`);
-    console.log(`[GameGateway] broadcastGameState: Players in game:`, game.state.players.map(p => ({ odId: p.odId, odName: p.odName, isConnected: p.isConnected, seatIndex: p.seatIndex })));
-    console.log(`[GameGateway] broadcastGameState: Active sockets:`, Array.from(this.playerSockets.entries()).map(([socketId, info]) => ({ socketId, odId: info.odId, tableId: info.tableId })));
+    if (!game) return;
+
+    console.log(`[GameGateway] broadcast: ${tableId} | stage=${game.state.stage} | players=${game.state.players.length} | pot=${game.state.pot} | active=${game.state.activePlayerIndex}`);
 
     // Send personalized state to each player (they only see their own cards)
     for (const player of game.state.players) {
       const clientState = this.gameEngine.getClientState(tableId, player.odId);
+      if (!clientState) continue;
 
-      if (!clientState) {
-        console.log(`[GameGateway] WARNING: Could not get client state for player ${player.odName} (${player.odId})`);
-        continue;
-      }
-
-      // Find socket for this player
-      let foundSocket = false;
       for (const [socketId, info] of this.playerSockets.entries()) {
         if (info.odId === player.odId && info.tableId === tableId) {
-          console.log(`[GameGateway] 📤 Sending gameState to player ${player.odName} (${player.odId}) via socket ${socketId}`);
-          console.log(`[GameGateway]    State: stage=${clientState.stage}, pot=${clientState.pot}, players=${clientState.players.length}, myCards=${clientState.myHoleCards?.length}`);
           this.server.to(socketId).emit('gameState', clientState);
-          foundSocket = true;
           break;
         }
-      }
-      if (!foundSocket) {
-        console.log(`[GameGateway] WARNING: No socket found for player ${player.odName} (${player.odId})`);
       }
     }
 
     // Also broadcast a spectator view (no hole cards)
     const spectatorState = this.gameEngine.getClientState(tableId, '__spectator__');
-    console.log(`[GameGateway] 📤 Broadcasting spectatorState to room ${tableId}`);
-    console.log(`[GameGateway] ========== BROADCAST END ==========`);
     this.server.to(tableId).emit('spectatorState', spectatorState);
+
+    // Schedule next hand if we just entered showdown
+    this.scheduleNextHand(tableId);
+  }
+
+  /**
+   * If the table is in showdown with 2+ players, schedule the next hand.
+   * This is the ONLY place that auto-starts the next hand, ensuring broadcast happens.
+   */
+  private scheduleNextHand(tableId: string) {
+    const game = this.gameEngine.getGame(tableId);
+    if (!game) return;
+
+    // Only schedule if in showdown with enough players
+    if (game.state.stage !== 'showdown' || game.state.players.length < 2) return;
+
+    // Don't schedule if already pending
+    if (this.nextHandTimeouts.has(tableId)) return;
+
+    console.log(`[GameGateway] Scheduling next hand for ${tableId} in 5 seconds`);
+    const timeout = setTimeout(() => {
+      this.nextHandTimeouts.delete(tableId);
+      const currentGame = this.gameEngine.getGame(tableId);
+      if (currentGame && currentGame.state.stage === 'showdown') {
+        console.log(`[GameGateway] Auto-starting next hand for ${tableId}`);
+        const state = this.gameEngine.startHand(tableId);
+        if (state) {
+          this.broadcastGameState(tableId);
+        }
+      }
+    }, 5000);
+
+    this.nextHandTimeouts.set(tableId, timeout);
   }
 }

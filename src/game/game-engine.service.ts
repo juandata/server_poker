@@ -686,17 +686,8 @@ export class GameEngineService {
       console.log(`[GameEngine] endHand: Not enough players (${state.players.length}), setting stage to waiting`);
       state.stage = 'waiting';
       state.winners = undefined; // Clear winners when going to waiting
-    } else {
-      // Auto-start next hand after 5 seconds
-      console.log(`[GameEngine] endHand: Scheduling next hand in 5 seconds`);
-      setTimeout(() => {
-        const currentGame = this.games.get(state.tableId);
-        if (currentGame && currentGame.state.stage === 'showdown') {
-          console.log(`[GameEngine] endHand: Auto-starting next hand`);
-          this.startHand(state.tableId);
-        }
-      }, 5000);
     }
+    // NOTE: Auto-start of next hand is handled by the Gateway (which can broadcast state)
   }
 
   getClientState(tableId: string, odId: string): ClientGameState | null {
