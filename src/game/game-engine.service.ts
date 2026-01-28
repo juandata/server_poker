@@ -500,7 +500,10 @@ export class GameEngineService {
 
         player.hasActed = true;
         if (player.odStack === 0) player.isAllIn = true;
-        state.lastAction = { seatIndex: playerIndex, text: `RAISE ${raiseTotal}` };
+
+        // Use RERAISE if this is not the first raise of the round
+        const actionText = state.raisesThisRound > 1 ? `RERAISE ${raiseTotal}` : `RAISE ${raiseTotal}`;
+        state.lastAction = { seatIndex: playerIndex, text: actionText };
         break;
 
       case 'allin':
@@ -653,7 +656,7 @@ export class GameEngineService {
     state.activePlayerIndex = -1;
 
     const activePlayers = state.players.filter(p => !p.folded);
-    let handWinners: Array<{ odId: string; amount: number; handRank: string }> = [];
+    let handWinners: Array<{ odId: string; amount: number; handRank: string; winningCards?: Card[] }> = [];
 
     if (activePlayers.length === 1) {
       // Single winner - no showdown needed
@@ -676,7 +679,12 @@ export class GameEngineService {
         if (player) {
           const playerWinAmount = winAmount + (i === 0 ? remainder : 0);
           player.odStack += playerWinAmount;
-          handWinners.push({ odId: w.odId, amount: playerWinAmount, handRank: w.hand.description });
+          handWinners.push({
+            odId: w.odId,
+            amount: playerWinAmount,
+            handRank: w.hand.description,
+            winningCards: w.hand.bestFive
+          });
         }
       });
     }
