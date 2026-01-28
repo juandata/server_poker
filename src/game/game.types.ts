@@ -69,6 +69,7 @@ export interface ClientGameState {
     seatIndex: number;
     text: string;
   };
+  raisesThisRound?: number;
 }
 
 export interface ClientPlayer {

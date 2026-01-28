@@ -747,6 +747,7 @@ export class GameEngineService {
       gameType: state.gameType,
       winners: state.winners,
       lastAction: state.lastAction,
+      raisesThisRound: state.raisesThisRound,
     };
   }
 

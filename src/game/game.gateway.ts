@@ -115,9 +115,19 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const playerInfo = this.playerSockets.get(client.id);
     if (playerInfo) {
       // Use a grace period before removing the player (allows for reconnection)
-      const DISCONNECT_GRACE_PERIOD_MS = 5000; // 5 seconds
+      const DISCONNECT_GRACE_PERIOD_MS = 30000; // 30 seconds - match client reconnect window
 
       console.log(`[GameGateway] Starting ${DISCONNECT_GRACE_PERIOD_MS}ms grace period for player ${playerInfo.odId}`);
+
+      // Mark player as disconnected immediately so other players see the status
+      const game = this.gameEngine.getGame(playerInfo.tableId);
+      if (game) {
+        const player = game.state.players.find(p => p.odId === playerInfo.odId);
+        if (player) {
+          player.isConnected = false;
+        }
+        this.broadcastGameState(playerInfo.tableId);
+      }
 
       // Clear any existing timeout for this user
       const existingTimeout = this.disconnectTimeouts.get(playerInfo.odId);
