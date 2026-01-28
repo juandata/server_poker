@@ -727,8 +727,8 @@ export class GameEngineService {
         seatIndex: p.seatIndex,
         isAllIn: p.isAllIn,
         isConnected: p.isConnected,
-        // Only show hole cards at showdown or if it's the player's own cards
-        holeCards: state.stage === 'showdown' && !p.folded ? p.holeCards : [],
+        // Only show hole cards at real showdown (not unopposed/win-by-fold)
+        holeCards: state.stage === 'showdown' && !p.folded && !(state.winners?.some(w => w.handRank === 'unopposed')) ? p.holeCards : [],
       }));
 
     return {
